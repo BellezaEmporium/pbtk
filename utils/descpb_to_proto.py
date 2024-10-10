@@ -82,8 +82,8 @@ def parse_msg(desc, scopes, syntax):
             out += wrap_block('oneof', blocks.pop('_oneof_%d' % index), oneof)
         
         out += fmt_ranges('extensions', desc.extension_range)
-        out += fmt_ranges('reserved', [*desc.reserved_range, *desc.reserved_name])
-    
+        out += fmt_ranges('reserved', desc.reserved_range)
+        out += fmt_ranges('reserved', desc.reserved_name)
     else:
         for service in desc.service:
             out2 = ''
