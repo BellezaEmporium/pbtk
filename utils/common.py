@@ -118,7 +118,7 @@ def insert_endpoint(base_path, obj):
                     
                     for i in obj2['request']['samples'] + obj['request'].pop('samples'):
                         # Simplify Protobuf-URL payloads
-                        lite = {k: sub('(!\d+[^esz]|!\d+s(?=\d+|0x[a-f0-9]+:0x[a-f0-9]+(!|$)))[^!]+', r'\1', v)
+                        lite = {k: sub(r'(!\d+[^esz]|!\d+s(?=\d+|0x[a-f0-9]+:0x[a-f0-9]+(!|$)))[^!]+', r'\1', v)
                                 if v.startswith('!') else v
                                 for k, v in i.items()}
                         if lite not in lite_samples:
@@ -164,7 +164,7 @@ def load_proto_msgs(proto_path, ret_source_info=False):
         if next_import not in arg_proto_files:
             arg_proto_files.insert(0, next_import)
             with open(next_import) as fd:
-                for prior_import in reversed(findall('import(?:\s*weak|public)?\s*"(.+?)"\s*;', fd.read())):
+                for prior_import in reversed(findall(r'import(?:\s*weak|public)?\s*"(.+?)"\s*;', fd.read())):
                     to_import.append(prior_import)
     
     # Execute protoc and import the actual module from a tmp

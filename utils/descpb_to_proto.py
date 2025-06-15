@@ -82,8 +82,8 @@ def parse_msg(desc, scopes, syntax):
             out += wrap_block('oneof', blocks.pop('_oneof_%d' % index), oneof)
         
         out += fmt_ranges('extensions', desc.extension_range)
-        out += fmt_ranges('reserved', desc.reserved_range)
-        out += fmt_ranges('reserved', desc.reserved_name)
+        out += fmt_ranges('reserved', [*desc.reserved_range, *desc.reserved_name])
+    
     else:
         for service in desc.service:
             out2 = ''
@@ -115,7 +115,10 @@ def fmt_value(val, options=None, desc=None, optarr=[]):
         if type(val) == bool:
             val = str(val).lower()
         elif desc and desc.enum_type:
-            val = desc.enum_type.values_by_number[val].name
+            if hasattr(val, '_values'):  # Handle RepeatedScalarFieldContainer
+                val = ', '.join(str(desc.enum_type.values_by_number[v].name) for v in val._values)
+            else:
+                val = desc.enum_type.values_by_number[val].name
         val = str(val)
     else:
         val = '"%s"' % val.encode('unicode_escape').decode('utf8')
@@ -206,9 +209,19 @@ def min_name(name, scopes):
 def wrap_block(type_, value, desc=None, name=None):
     out = ''
     if type_:
-        out = '\n%s %s {\n' % (type_, name or desc.name)
+        # Determine block name with proper validation
+        block_name = None
+        if name is not None:
+            block_name = name
+        elif desc is not None and hasattr(desc, 'name'):
+            block_name = desc.name
+            
+        if block_name is None:
+            raise ValueError("Either a valid name or a descriptor with a name must be provided")
+            
+        out = '\n%s %s {\n' % (type_, block_name)
     
-    if desc:
+    if desc and hasattr(desc, 'options'):
         for (option, optval) in desc.options.ListFields():
             value = 'option %s = %s;\n' % (option.name, fmt_value(optval, desc=option)) + value
     
@@ -223,14 +236,15 @@ def wrap_block(type_, value, desc=None, name=None):
 def fmt_ranges(name, ranges):
     text = []
     for range_ in ranges:
-        if type(range_) != str and range_.end - 1 > range_.start:
-            if range_.end < 0x20000000:
-                text.append('%d to %d' % (range_.start, range_.end - 1))
+        if hasattr(range_, 'start') and hasattr(range_, 'end'):  # Check if it's a range object
+            if range_.end - 1 > range_.start:
+                if range_.end < 0x20000000:
+                    text.append('%d to %d' % (range_.start, range_.end - 1))
+                else:
+                    text.append('%d to max' % range_.start)
             else:
-                text.append('%d to max' % range_.start)
-        elif type(range_) != str:
-            text.append(fmt_value(range_.start))
-        else:
+                text.append(fmt_value(range_.start))
+        else:  # Handle string or other types
             text.append(fmt_value(range_))
     if text:
         return '\n%s %s;\n' % (name, ', '.join(text))

@@ -16,9 +16,11 @@ from struct import unpack
 from io import BytesIO
 from re import match
 
-# Monkey-patch enum value checking,
-from google.protobuf.internal import type_checkers
-type_checkers.SupportsOpenEnums = lambda x: True
+# Monkey-patch enum value checking. 
+# On newer versions of Protobuf, the SupportsOpenEnums options doesn't exist in type_checkers,
+# hence we remake the def.
+def SupportsOpenEnums(enum_type):
+    return enum_type.containing_type.syntax == 'proto3'
 
 # Monkey-patch map object creation (suppressing the map_entry option
 # from generated classes),
@@ -145,14 +147,14 @@ class QwordSpinBox(QAbstractSpinBox):
         self._maximum = max_
         self.int_ = float if float_ else int
 
-        rx = QRegExp('-?\d{0,20}(?:\.\d{0,20})?' if float_ else '-?\d{0,20}')
+        rx = QRegExp(r'-?\d{0,20}(?:\.\d{0,20})?' if float_ else r'-?\d{0,20}')
         validator = QRegExpValidator(rx, self)
 
         self._lineEdit = QLineEdit(self)
         self._lineEdit.setText(str(self.int_(0)))
         self._lineEdit.setValidator(validator)
         self._lineEdit.textEdited.connect(partial(self.setValue, change=False))
-        self.editingFinished.connect(lambda: self.setValue(self.value(), update=False) or True)
+        self._lineEdit.editingFinished.connect(lambda: self.setValue(self.value(), update=False))
         self.setLineEdit(self._lineEdit)
 
     def value(self):
@@ -214,13 +216,13 @@ class ProtobufItem(QTreeWidgetItem):
         super().__init__(item, [self.full_name.split('.')[-1] + '+' * self.repeated + '  ', type_txt + '  '])
         
         if not self.required:
-            self.setCheckState(0, Qt.Unchecked)
-            self.last_check_state = Qt.Unchecked
+            self.setCheckState(0, Qt.CheckState.Unchecked)
+            self.last_check_state = Qt.CheckState.Unchecked
         
         self.app.ds_items[id(ds)][tuple(path)] = self # Hierarchy array
         
         if self.is_msg:
-            self.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
+            self.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
             self.expanded = self.lazy_initialize
             return
         
@@ -283,11 +285,12 @@ class ProtobufItem(QTreeWidgetItem):
     def unvoid(self, recur=True):
         if self.void or self.is_msg:
             if not self.required:
-                self.setCheckState(0, Qt.Checked)
-                self.last_check_state = Qt.Checked
+                self.setCheckState(0, Qt.CheckState.Checked)
+                self.last_check_state = Qt.CheckState.Checked
             
-            if recur and self.parent():
-                self.parent().unvoid(True)
+            parent = self.parent()
+            if recur and parent and isinstance(parent, ProtobufItem):
+                parent.unvoid(True)
             
             self.void = False
     
@@ -333,8 +336,9 @@ class ProtobufItem(QTreeWidgetItem):
     
     def get_parent_pb(self):
         if self.parent_pb is None:
-            if self.parent():
-                self.parent_pb = self.parent().get_self_pb()
+            parent = self.parent()
+            if parent and isinstance(parent, ProtobufItem):
+                self.parent_pb = parent.get_self_pb()
             else:
                 self.parent_pb = self.app.pb_request
         
@@ -363,8 +367,8 @@ class ProtobufItem(QTreeWidgetItem):
                     self.self_pb.SetInParent()
                 
                 if not self.required:
-                    self.setCheckState(0, Qt.Checked)
-                    self.last_check_state = Qt.Checked
+                    self.setCheckState(0, Qt.CheckState.Checked)
+                    self.last_check_state = Qt.CheckState.Checked
         
         # Return value is for get_parent_pb recursion
         if self.is_msg:
@@ -386,24 +390,29 @@ class ProtobufItem(QTreeWidgetItem):
                 setattr(self.parent_pb, self.ds.name, val)
             
             else:
-                self.parent_pb.ClearField(self.ds.name)
+                if self.parent_pb is not None:
+                    self.parent_pb.ClearField(self.ds.name)
                 self.self_pb = None
                 self.void = True
         
         else:
             if val is not None:
-                if len(self.self_pb) > self.index: # We exist already
+                if self.self_pb is not None and self.index is not None and len(self.self_pb) > self.index: # We exist already
                     self.self_pb[self.index] = val
                 
                 else: # We were just created by get_self_pb
-                    self.self_pb.append(val)
+                    if self.self_pb is None:
+                        self.get_self_pb()
+                    if self.self_pb is not None:
+                        self.self_pb.append(val)
             
             else: # We must have existed already right?
-                del self.self_pb[self.index]
-                del item_indices[id(self.self_pb)][self.index]
+                if self.self_pb is not None and self.index is not None and len(self.self_pb) > self.index:
+                    del self.self_pb[self.index]
+                    del item_indices[id(self.self_pb)][self.index]
                 
-                for i in range(self.index, len(item_indices[id(self.self_pb)])):
-                    item_indices[id(self.self_pb)][i].index -= 1
+                    for i in range(self.index, len(item_indices[id(self.self_pb)])):
+                        item_indices[id(self.self_pb)][i].index -= 1
                 
                 self.self_pb = None # So that if we're repeated we're recreated further
                 self.void = True
@@ -441,13 +450,13 @@ class ProtobufItem(QTreeWidgetItem):
             self.last_check_state = self.checkState(0)
             
             if not self.is_msg:
-                if self.last_check_state == Qt.Checked:
+                if self.last_check_state == Qt.CheckState.Checked:
                     self.update(self.value)
                 else:
                     self.update(None)
             
             elif not self.self_pb: # We have just checked the message !
-                assert self.last_check_state == Qt.Checked
+                assert self.last_check_state == Qt.CheckState.Checked
                 self.get_self_pb() # Recreates parent
                 
                 for i in range(self.childCount()):
@@ -457,15 +466,17 @@ class ProtobufItem(QTreeWidgetItem):
                         self.child(i).update(self.child(i).value)
             
             else: # We have just unchecked the message !
-                assert self.last_check_state != Qt.Checked
+                assert self.last_check_state != Qt.CheckState.Checked
                 for i in range(self.childCount()):
                     if not self.child(i).required:
-                        self.child(i).setCheckState(0, Qt.Unchecked)
+                        self.child(i).setCheckState(0, Qt.CheckState.Unchecked)
                         self.child(i).update_check(True)
                         self.child(i).parent_pb = None
                         self.child(i).self_pb = None
-                
-                self.get_self_pb().Clear()
+
+                pb = self.get_self_pb()
+                if pb is not None:
+                    pb.Clear()
                 self.update(None)
 
             if not recursive:
@@ -476,8 +487,8 @@ class ProtobufItem(QTreeWidgetItem):
         
     
     """
-        Wheck field name is clicked, offer to rename the field
-        
+        When a field name is clicked, offer to rename the field
+
         In order to rewrite field name in the .proto without discarding
         comments or other information, we'll ask protoc to generate file
         source information [1], that we'll parse and that will give us
@@ -501,8 +512,13 @@ class ProtobufItem(QTreeWidgetItem):
                 QMessageBox.warning(self.app.view, ' ', 'Field was not found in .proto, did you edit it elsewhere?')
     
     def do_rename(self, new_name):
-        file_set, proto_path = next(load_proto_msgs(self.app.current_req_proto, True), None)
-        file_set = file_set.file
+        file_set, proto_path = next(load_proto_msgs(self.app.current_req_proto, True))
+        if isinstance(file_set, str):
+            raise TypeError("Expected file_set to be a FileDescriptorSet, got str: {}".format(file_set))
+        if hasattr(file_set, 'file'):
+            file_set = file_set.file
+        else:
+            raise TypeError("Expected file_set to have a 'file' attribute, got type: {}".format(type(file_set)))
         
         """
         First, recursively iterate over descriptor fields until we have
@@ -521,7 +537,9 @@ class ProtobufItem(QTreeWidgetItem):
                         # Once we have file position information, do
                         # write the new field name in .proto
                         
-                        file_path = str(proto_path / file_.name)
+                        from pathlib import Path
+                        proto_path_str = str(proto_path) if not isinstance(proto_path, Path) else proto_path
+                        file_path = str(Path(proto_path_str) / file_.name)
                         with open(file_path) as fd:
                             lines = fd.readlines()
                         assert lines[start_line][start_col:end_col] == self.text(0).strip('+ ')
@@ -558,7 +576,7 @@ class ProtobufItem(QTreeWidgetItem):
     
     def _edit(self, ev=None):
         if not self.widget.hasFocus():
-            self.widget.setFocus(Qt.MouseFocusReason)
+            self.widget.setFocus(Qt.FocusReason.MouseFocusReason)
             if hasattr(self.widget, 'selectAll'):
                 self.widget.selectAll()
 
@@ -575,8 +593,8 @@ class ProtocolDataItem(QTreeWidgetItem):
         self.required = '{%s}' % name in self.app.base_url
         
         if not self.required:
-            self.setCheckState(0, Qt.Checked)
-            self.last_check_state = Qt.Checked
+            self.setCheckState(0, Qt.CheckState.Checked)
+            self.last_check_state = Qt.CheckState.Checked
 
         self.widget = QLineEdit()
         self.widget.setFrame(False)
@@ -599,7 +617,7 @@ class ProtocolDataItem(QTreeWidgetItem):
     def update_check(self, col):
         if not self.required and self.last_check_state != self.checkState(0):
             self.last_check_state = self.checkState(0)
-            if self.last_check_state != Qt.Checked:
+            if self.last_check_state != Qt.CheckState.Checked:
                 del self.app.get_params[self.name]
             else:
                 self.app.get_params[self.name] = self.value
@@ -607,5 +625,5 @@ class ProtocolDataItem(QTreeWidgetItem):
     
     def edit(self, ev=None):
         if not self.widget.hasFocus():
-            self.widget.setFocus(Qt.MouseFocusReason)
+            self.widget.setFocus(Qt.FocusReason.MouseFocusReason)
             self.widget.selectAll()

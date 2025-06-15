@@ -38,12 +38,7 @@ from utils.common import register_extractor, extractor_main
 """
 
 browser = which('C:/Program Files (x86)/Google/Chrome/Application/chrome.exe') or \
-          which('C:/Program Files/Google/Chrome/Application/chrome.exe') or \
-          which('chromium-browser') or which('chromium') or which('chrome') or \
-          which('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') or \
-          which('/Applications/Chromium.app/Contents/MacOS/Chromium') or \
-          which('Google Chrome') or which('Chromium') or \
-          'google-chrome'
+          which('chromium-browser') or which('chromium') or which('chrome') or 'google-chrome'
 
 @register_extractor(name = 'pburl_extract',
                     desc = 'Extract and capture Protobuf-URL endpoints from a Chrome instance (http://*)',
@@ -195,125 +190,123 @@ history.replaceState = wrap(history.replaceState);'''})
                 send(ws, 'Debugger.evaluateOnCallFrame', {
                     'callFrameId': msg['callFrames'][0]['callFrameId'],
                     'expression': '''
-(function() {
-    var objToName = new WeakMap();
-    var specStringToName = {};
+var objToName = new WeakMap();
+var specStringToName = {};
 
-    var typeArray = {'d': 'double', 'f': 'float', 'i': 'int32', 'j': 'int64', 'u': 'uint32', 'v': 'uint64', 'x': 'fixed32', 'y': 'fixed64', 'g': 'sfixed32', 'h': 'sfixed64', 'n': 'sint32', 'o': 'sint64', 'e': 'enum', 's': 'string', 'z': 'string (base64)', 'B': 'bytes', 'b': 'bool', 'm': 'message'};
-    var namerGen = function* () {
-        for(var len = 0; ; len++)
-            yield* (function* namer2(len) {
-                for(var char of 'abcdefghijklmnopqrstuvwxyz')
-                    for(var suffix of len ? namer2(len - 1) : [''])
-                        yield char + suffix;
-            })(len);
+var typeArray = {'d': 'double', 'f': 'float', 'i': 'int32', 'j': 'int64', 'u': 'uint32', 'v': 'uint64', 'x': 'fixed32', 'y': 'fixed64', 'g': 'sfixed32', 'h': 'sfixed64', 'n': 'sint32', 'o': 'sint64', 'e': 'enum', 's': 'string', 'z': 'string (base64)', 'B': 'bytes', 'b': 'bool', 'm': 'message'};
+var namerGen = function* () {
+    for(var len = 0; ; len++)
+        yield* (function* namer2(len) {
+            for(var char of 'abcdefghijklmnopqrstuvwxyz')
+                for(var suffix of len ? namer2(len - 1) : [''])
+                    yield char + suffix;
+        })(len);
+};
+var parseMsg = function(msg, tab, name) {
+    var namer = namerGen();
+    var namer_msg = namerGen();
+    
+    var text = `${tab}message ${name.split('.').pop()} {\\n`;
+    tab += '    ';
+    
+    // console.log(JSON.stringify(['__INFO', typeof msg]));
+    
+    if(typeof msg == 'string') {
+        specStringToName[msg] = name;
+    
+        var message_spec_str = msg;
+        var nested_messages_spec_array = null;
+    }
+    else {
+        objToName.set(msg, name);
+        
+        var message_spec_str = msg.%s;
+        var nested_messages_spec_array = msg.%s;
+    }
+    
+    var new_types_alias = {
+        a: "B",
+        k: "j",
+        p: "o",
+        w: "v",
+        q: "y",
+        r: "h"
     };
-    var parseMsg = function(msg, tab, name) {
-        var namer = namerGen();
-        var namer_msg = namerGen();
+    
+    var field_number = 0;
+    
+    var nested_message_index = 0;
+    
+    while(message_spec_str.length) { // Parse a string such as: "MMmemmswm11mmibbb18mbmkmImi"
         
-        var text = `${tab}message ${name.split('.').pop()} {\\n`;
-        tab += '    ';
+        var field_number_regex = message_spec_str.match(/^(\d+)(.+)/);
         
-        // console.log(JSON.stringify(['__INFO', typeof msg]));
+        // Consume the number indicating the next field number, if present
         
-        if(typeof msg == 'string') {
-            specStringToName[msg] = name;
+        if(field_number_regex) {
         
-            var message_spec_str = msg;
-            var nested_messages_spec_array = null;
+            var [_, field_number, message_spec_str] = field_number_regex;
+            
+            field_number = parseInt(field_number, 10);
         }
         else {
-            objToName.set(msg, name);
-            
-            var message_spec_str = msg.%s;
-            var nested_messages_spec_array = msg.%s;
+            field_number++;
         }
         
-        var new_types_alias = {
-            a: "B",
-            k: "j",
-            p: "o",
-            w: "v",
-            q: "y",
-            r: "h"
-        };
+        // Consume the next letter
         
-        var field_number = 0;
+        var field_letter = message_spec_str[0];
+        message_spec_str = message_spec_str.substr(1);
+    
+        var label = field_letter.toUpperCase() == field_letter ? 'repeated ': '';
         
-        var nested_message_index = 0;
+        field_letter = field_letter.toLowerCase();
         
-        while(message_spec_str.length) { // Parse a string such as: "MMmemmswm11mmibbb18mbmkmImi"
+        if(new_types_alias[field_letter]) {
+        
+            field_letter = new_types_alias[field_letter];
+        }
+        var type = typeArray[field_letter];
+        
+        var comment = '';
+        if(type == 'enum') {
+            comment = ' // enum';
+            type = 'int32';
+        }
+        
+        if(type == 'message') {
             
-            var field_number_regex = message_spec_str.match(/^(\d+)(.+)/);
+            if(typeof nested_messages_spec_array[nested_message_index] == 'string') {
             
-            // Consume the number indicating the next field number, if present
-            
-            if(field_number_regex) {
-            
-                var [_, field_number, message_spec_str] = field_number_regex;
-                
-                field_number = parseInt(field_number, 10);
+                type = specStringToName[nested_messages_spec_array[nested_message_index]];
             }
             else {
-                field_number++;
+            
+                type = objToName.get(nested_messages_spec_array[nested_message_index]);
+            }
+            if(!type) {
+                type = namer_msg.next().value;
+                type = `${name}.${type[0].toUpperCase()}${type.slice(1)}`;
+                text += parseMsg(nested_messages_spec_array[nested_message_index], tab, type);
+            }
+            if(type.split('.').slice(0, -1).join('.') == name) {
+                type = type.split('.').pop();
             }
             
-            // Consume the next letter
-            
-            var field_letter = message_spec_str[0];
-            message_spec_str = message_spec_str.substr(1);
-        
-            var label = field_letter.toUpperCase() == field_letter ? 'repeated ': '';
-            
-            field_letter = field_letter.toLowerCase();
-            
-            if(new_types_alias[field_letter]) {
-            
-                field_letter = new_types_alias[field_letter];
-            }
-            var type = typeArray[field_letter];
-            
-            var comment = '';
-            if(type == 'enum') {
-                comment = ' // enum';
-                type = 'int32';
-            }
-            
-            if(type == 'message') {
-                
-                if(typeof nested_messages_spec_array[nested_message_index] == 'string') {
-                
-                    type = specStringToName[nested_messages_spec_array[nested_message_index]];
-                }
-                else {
-                
-                    type = objToName.get(nested_messages_spec_array[nested_message_index]);
-                }
-                if(!type) {
-                    type = namer_msg.next().value;
-                    type = `${name}.${type[0].toUpperCase()}${type.slice(1)}`;
-                    text += parseMsg(nested_messages_spec_array[nested_message_index], tab, type);
-                }
-                if(type.split('.').slice(0, -1).join('.') == name) {
-                    type = type.split('.').pop();
-                }
-                
-                nested_message_index++;
-            }
-            
-            text += `${tab}${label}${type} ${namer.next().value} = ${field_number};${comment}\\n`;
+            nested_message_index++;
         }
         
-        return `${text}${tab.slice(0, -4)}}\n`;
-    };
-    try {
-        console.log(JSON.stringify(['__HOOK', [parseMsg(b, '', 'Top'), c.join('')[0] === '!' ? c.join('') : c.join('&').replace(/'/g, '%%27')]]));
+        text += `${tab}${label}${type} ${namer.next().value} = ${field_number};${comment}\\n`;
     }
-    catch(e) {
-        console.log(JSON.stringify(['__ERR', e.stack]));
-    }
-})();''' % (messageSpecStringVar, nestedMessagesSpecArrayVar)
+    
+    return `${text}${tab.slice(0, -4)}}\n`;
+};
+try {
+    console.log(JSON.stringify(['__HOOK', [parseMsg(b, '', 'Top'), c.join('')[0] === '!' ? c.join('') : c.join('&').replace(/'/g, '%%27')]]));
+}
+catch(e) {
+    console.log(JSON.stringify(['__ERR', e.stack]));
+}''' % (messageSpecStringVar, nestedMessagesSpecArrayVar)
                 })
             
             if not awaiting_srcs:
@@ -360,11 +353,10 @@ history.replaceState = wrap(history.replaceState);'''})
             sid, padding = data
             src = padding + msg['scriptSource']
             
-            targets = ['0);c.length=a;return c.join("")}', '0);return c.join("")}', 'return c.join("&").replace(']
+            targets = ['0);c.length=a;return c.join("")}', 'return c.join("&").replace(']
             for target in targets:
                 if target in src:
-                    
-                    messageSpecStringVar, nestedMessagesSpecArrayVar = search('=a:\(this\.[\w$]+=a\.([\w$]+),this\.[\w$]+=a\.([\w$]+)\);(?:a=)?this\.', src).groups()
+                    messageSpecStringVar, nestedMessagesSpecArrayVar = search('a:\(this\.[\w$]+=a\.([\w$]+),this\.[\w$]+=a\.([\w$]+)\);this\.', src).groups()
                     before = src.split(target)[0]
                     sid_to_vars[sid] = messageSpecStringVar, nestedMessagesSpecArrayVar
                     
@@ -436,7 +428,7 @@ def logUrl(url):
             proto_to_urls[proto].add(url)
             return
     
-    print('[Not captured]', url, data, '/', 'across', '=>', sent_msgs)
+    print('[Not captured]', url, data)
 
 if __name__ == '__main__':
     extractor_main('pburl_extract')

@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 #-*- encoding: Utf-8 -*-
-from PyQt5.QtWidgets import QApplication, QListWidgetItem, QDesktopWidget, QFileDialog, QInputDialog, QProgressDialog, QMessageBox, QFileSystemModel, QHeaderView
+from PyQt5.QtWidgets import QApplication, QListWidgetItem, QDesktopWidget, QFileDialog, QInputDialog, QProgressDialog, QMessageBox, QFileSystemModel, QHeaderView, QTreeWidgetItemIterator, QWidget, QDialog
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QThread
 from PyQt5.QtGui import QDesktopServices, QTextOption
 from PyQt5.uic import loadUi
@@ -21,6 +21,24 @@ from views.fuzzer import ProtobufItem, ProtocolDataItem
 from utils.transports import *
 from extractors import *
 
+class Worker(QThread):
+    progress = pyqtSignal(str, float)
+    finished = pyqtSignal(dict)
+    
+    def __init__(self, inputs, extractor):
+        super().__init__()
+        self.inputs = inputs
+        self.extractor = extractor
+    
+    def run(self):
+        outputs = {}
+        for path, folder in self.inputs:
+            def progress_callback(info, progress=None):
+                self.progress.emit(info, progress)
+            
+            outputs[folder] = self.extractor['func'](path, progress_callback)
+        self.finished.emit(outputs)
+
 """
     This script runs the main code for the PBTK GUI, and essentially
     links loaded QtDesigner *.uis within themselves using signals, and
@@ -29,6 +47,14 @@ from extractors import *
 """
 
 class PBTKGUI(QApplication):
+    welcome: QWidget
+    choose_extractor: QDialog
+    choose_proto: QDialog  
+    create_endpoint: QDialog
+    choose_endpoint: QDialog
+    fuzzer: QWidget
+    proto_fs: QFileSystemModel
+    
     def __init__(self):
         super().__init__(argv)
         signal(SIGINT, SIG_DFL)
@@ -95,12 +121,12 @@ class PBTKGUI(QApplication):
         
         for name, meta in extractors.items():
             item = QListWidgetItem(meta['desc'], self.choose_extractor.extractors)
-            item.setData(Qt.UserRole, name)
+            item.setData(Qt.ItemDataRole.UserRole, name)
         
         self.set_view(self.choose_extractor)
     
     def prompt_extractor(self, item):
-        extractor = extractors[item.data(Qt.UserRole)]
+        extractor = extractors[item.data(Qt.ItemDataRole.UserRole)]
         inputs = []
         if not assert_installed(self.view, **extractor.get('depends', {})):
             return
@@ -120,7 +146,7 @@ class PBTKGUI(QApplication):
             wait.setWindowTitle(' ')
             self.set_view(wait)
             
-            self.worker = Worker(inputs, extractor)
+            self.worker = ExtractorWorker(inputs, extractor)
             self.worker.progress.connect(self.extraction_progress)
             self.worker.finished.connect(self.extraction_done)
             self.worker.start()
@@ -130,7 +156,7 @@ class PBTKGUI(QApplication):
         
         if progress is not None:
             self.view.setRange(0, 100)
-            self.view.setValue(int(progress * 100))
+            self.view.setValue(progress * 100)
         else:
             self.view.setRange(0, 0)
     
@@ -193,7 +219,7 @@ class PBTKGUI(QApplication):
                 
                 for name, meta in transports.items():
                     item = QListWidgetItem(meta['desc'], self.create_endpoint.transports)
-                    item.setData(Qt.UserRole, (name, meta.get('ui_data_form')))
+                    item.setData(Qt.ItemDataRole.UserRole, (name, meta.get('ui_data_form')))
             
             elif getattr(self, 'saved_transport_choice'):
                 self.create_endpoint.transports.setCurrentItem(self.saved_transport_choice)
@@ -204,7 +230,7 @@ class PBTKGUI(QApplication):
             self.set_view(self.create_endpoint)
     
     def pick_transport(self, item):
-        name, desc = item.data(Qt.UserRole)
+        name, desc = item.data(Qt.ItemDataRole.UserRole)
         self.has_pb_param = desc and 'regular' in desc
         self.create_endpoint.reqDataSubform.show()
         if self.has_pb_param:
@@ -233,7 +259,7 @@ class PBTKGUI(QApplication):
         else:
             json = {
                 'request': {
-                    'transport': transport.data(Qt.UserRole)[0],
+                    'transport': transport.data(Qt.ItemDataRole.UserRole)[0],
                     'proto_path': request_pb[0].replace(str(BASE_PATH / 'protos'), '').strip('/\\'),
                     'proto_msg': request_pb[1],
                     'url': url
@@ -244,7 +270,7 @@ class PBTKGUI(QApplication):
             
             sample_data = list(filter(None, sample_data.split('\n')))
             if sample_data:
-                transport_obj = transports[transport.data(Qt.UserRole)[0]]
+                transport_obj = transports[transport.data(Qt.ItemDataRole.UserRole)[0]]
                 transport_obj = transport_obj['func'](pb_param, url)
                 
                 for sample_id, sample in enumerate(sample_data):
@@ -279,7 +305,9 @@ class PBTKGUI(QApplication):
         for name in listdir(str(BASE_PATH / 'endpoints')):
             if name.endswith('.json'):
                 item = QListWidgetItem(name.split('.json')[0], self.choose_endpoint.endpoints)
-                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                flags = item.flags()
+                flags &= ~Qt.ItemFlags.ItemIsEnabled
+                item.setFlags(flags)
                 
                 pb_msg_to_endpoints = defaultdict(list)
                 with open(str(BASE_PATH / 'endpoints' / name)) as fd:
@@ -288,26 +316,33 @@ class PBTKGUI(QApplication):
                 
                 for pb_msg, endpoints in pb_msg_to_endpoints.items():
                     item = QListWidgetItem(' ' * 4 + pb_msg, self.choose_endpoint.endpoints)
-                    item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                    flags = item.flags()
+                    flags &= ~Qt.ItemFlags.ItemIsEnabled
+                    item.setFlags(Qt.ItemFlags(flags))
                     
                     for endpoint in endpoints:
                         path_and_qs = '/' + endpoint['request']['url'].split('/', 3).pop()
                         item = QListWidgetItem(' ' * 8 + path_and_qs, self.choose_endpoint.endpoints)
-                        item.setData(Qt.UserRole, endpoint)
-        
+                        item.setData(Qt.ItemDataRole.UserRole, endpoint)
+
         self.set_view(self.choose_endpoint)
     
     def launch_fuzzer(self, item):
         if type(item) == int:
             data, sample_id = self.fuzzer.comboBox.itemData(item)
         else:
-            data, sample_id = item.data(Qt.UserRole), 0
-        
+            data, sample_id = item.data(Qt.ItemDataRole.UserRole), 0
+
         if data:
             self.current_req_proto = BASE_PATH / 'protos' / data['request']['proto_path']
             
-            self.pb_request = load_proto_msgs(self.current_req_proto)
-            self.pb_request = dict(self.pb_request)[data['request']['proto_msg']]()
+            pb_messages = dict(load_proto_msgs(str(self.current_req_proto)))
+            msg_name = str(data['request']['proto_msg'])
+            message_class = pb_messages.get(msg_name)
+            if message_class and callable(message_class):
+                self.pb_request = message_class()
+            else:
+                raise ValueError(f"Message {msg_name} not found or not a valid message class")
             
             self.pb_resp = None
             
@@ -446,7 +481,7 @@ class PBTKGUI(QApplication):
     Simple wrapper for running extractors in background.
 """
 
-class Worker(QThread):
+class ExtractorWorker(QThread):
     finished = pyqtSignal(object)
     progress = pyqtSignal(object, object)
 

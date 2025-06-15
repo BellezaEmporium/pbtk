@@ -33,9 +33,9 @@ def nest_and_print_to_files(msg_path_to_obj, msg_to_referrers):
             del msg_to_referrers[msg]
             for field, referrer, _ in referrers:
                 field = next((i for i in msg_path_to_obj[referrer].field if i.name == field), None)
-                
-                field.ClearField('type_name')
-                field.type = field.TYPE_BYTES
+                if field:
+                    field.ClearField('type_name')
+                    field.type = field.TYPE_BYTES
         else:
             for _, referrer, _ in referrers:
                 msg_to_imports[referrer].append(msg)
@@ -245,7 +245,8 @@ def fix_naming(nested, new_path, prev_path, top_path,
     for field, referrer, _ in msg_to_referrers.get(orig_path, []):
         field = next((i for i in msg_path_to_obj[referrer].field if i.name == field), None)
         
-        field.type_name = '.' + new_path
+        if field is not None:
+            field.type_name = '.' + new_path
 
         # Fix imports in reference's files.
         referrer_top_path = msg_to_topmost.get(referrer, referrer)
